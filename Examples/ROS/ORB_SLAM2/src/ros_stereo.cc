@@ -18,7 +18,10 @@
 * along with ORB-SLAM2. If not, see <http://www.gnu.org/licenses/>.
 */
 
-
+//test with
+/*
+ * rosbag play --pause V1_02_medium.bag /cam0/image_raw:=/camera/left/image_raw /cam1/image_raw:=/camera/right/image_raw
+ */
 #include<iostream>
 #include<algorithm>
 #include<fstream>
@@ -34,6 +37,9 @@
 
 #include"../../../include/System.h"
 
+#include <tf/transform_broadcaster.h>
+#include <nav_msgs/Odometry.h>
+
 using namespace std;
 
 class ImageGrabber
@@ -48,9 +54,12 @@ public:
     cv::Mat M1l,M2l,M1r,M2r;
 };
 
+ros::Publisher *odom_pub_ptr;
+tf::TransformBroadcaster *odom_broadcaster_ptr;
+
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "RGBD");
+    ros::init(argc, argv, "ORBSLAM_STEREO");
     ros::start();
 
     if(argc != 4)
@@ -58,7 +67,7 @@ int main(int argc, char **argv)
         cerr << endl << "Usage: rosrun ORB_SLAM2 Stereo path_to_vocabulary path_to_settings do_rectify" << endl;
         ros::shutdown();
         return 1;
-    }    
+    }
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::STEREO,true);
@@ -109,11 +118,16 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nh;
 
+    odom_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Odometry>("odom", 50));
+    odom_broadcaster_ptr = new tf::TransformBroadcaster;
+
     message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
     message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "camera/right/image_raw", 1);
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
     message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
     sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));
+
+    ROS_INFO("INIT SUCCESS");
 
     ros::spin();
 
@@ -155,16 +169,71 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         return;
     }
 
+    cv::Mat T_C_W_opencv;
     if(do_rectify)
     {
         cv::Mat imLeft, imRight;
         cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
         cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
-        mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
+        T_C_W_opencv = mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
     }
     else
     {
-        mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
+        T_C_W_opencv = mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
+    }
+    ROS_INFO("ORBSLAM");
+    // If tracking successfull
+    if (!T_C_W_opencv.empty()) {
+        static int counter = 0;
+        counter++;
+        //std::cout << T_C_W_opencv << std::endl;
+        //todo: transform 4x4 transform matrix to rotation and transformation in odometry message
+        ROS_INFO_THROTTLE(1.0, "pub odom");
+        static double x = 0.0;
+        static double y = 0.0;
+        static double th = 0.0;
+
+        double vx = 0.1;
+        double vy = 0;
+        double vth = 0.0;
+
+        double dt = 0.1;
+        double delta_x = (vx * cos(th) - vy * sin(th)) * dt;
+        double delta_y = (vx * sin(th) + vy * cos(th)) * dt;
+        double delta_th = vth * dt;
+
+        x += delta_x;
+        y += delta_y;
+        th += delta_th;
+
+        geometry_msgs::Quaternion odom_quat = tf::createQuaternionMsgFromYaw(th);
+        geometry_msgs::TransformStamped odom_trans;
+        odom_trans.header.stamp = ros::Time::now();
+        odom_trans.header.frame_id = "odom";
+        odom_trans.child_frame_id = "base_link";
+
+        odom_trans.transform.translation.x = y;
+        odom_trans.transform.translation.y = x;
+        odom_trans.transform.translation.z = 0.0;
+        odom_trans.transform.rotation = odom_quat;
+        odom_broadcaster_ptr->sendTransform(odom_trans);
+
+        nav_msgs::Odometry odom;
+        odom.header.stamp = ros::Time::now();
+        odom.header.frame_id = "odom";
+
+        //set the position
+        odom.pose.pose.position.x = y;
+        odom.pose.pose.position.y = x;
+        odom.pose.pose.position.z = 0.0;
+        odom.pose.pose.orientation = odom_quat;
+
+        //set the velocity
+        odom.child_frame_id = "base_link";
+        odom.twist.twist.linear.x = vx;
+        odom.twist.twist.linear.y = vy;
+        odom.twist.twist.angular.z = vth;
+        odom_pub_ptr->publish(odom);
     }
 
 }
