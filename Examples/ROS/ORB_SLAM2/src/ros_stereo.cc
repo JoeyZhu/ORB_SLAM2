@@ -144,6 +144,42 @@ int main(int argc, char **argv)
     return 0;
 }
 
+void publish_odom(geometry_msgs::Vector3 xyz_p,
+        geometry_msgs::Vector3 xyz_v_l,
+        geometry_msgs::Vector3 xyz_v_a,
+        geometry_msgs::Quaternion odom_quat){
+
+    ROS_INFO_THROTTLE(1.0, "pub odom");
+
+    geometry_msgs::TransformStamped odom_trans;
+    odom_trans.header.stamp = ros::Time::now();
+    odom_trans.header.frame_id = "odom";
+    odom_trans.child_frame_id = "base_link";
+
+    odom_trans.transform.translation.x = xyz_p.x;
+    odom_trans.transform.translation.y = xyz_p.y;
+    odom_trans.transform.translation.z = xyz_p.z;
+    odom_trans.transform.rotation = odom_quat;
+    odom_broadcaster_ptr->sendTransform(odom_trans);
+
+    nav_msgs::Odometry odom;
+    odom.header.stamp = ros::Time::now();
+    odom.header.frame_id = "odom";
+
+    //set the position
+    odom.pose.pose.position.x = xyz_p.x;
+    odom.pose.pose.position.y = xyz_p.y;
+    odom.pose.pose.position.z = xyz_p.z;
+    odom.pose.pose.orientation = odom_quat;
+
+    //set the velocity
+    odom.child_frame_id = "base_link";
+    odom.twist.twist.linear = xyz_v_l;
+    odom.twist.twist.angular = xyz_v_a;
+    odom_pub_ptr->publish(odom);
+}
+
+
 void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
 {
     // Copy the ros image message to cv::Mat.
@@ -186,56 +222,36 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
     if (!T_C_W_opencv.empty()) {
         static int counter = 0;
         counter++;
-        //std::cout << T_C_W_opencv << std::endl;
+        geometry_msgs::Vector3 xyz_p, xyz_v_l, xyz_v_a;
+        geometry_msgs::Quaternion odom_quat;
+
+        tf::Matrix3x3 m;
+        tf::Quaternion q;
+        m.getRotation(q);
+        odom_quat.x = q.getX();
+        odom_quat.y = q.getY();
+        odom_quat.z = q.getZ();
+        odom_quat.w = q.getW();
+
+        std::cout << "T_C_W_opencv" << std::endl;
+        std::cout << T_C_W_opencv << std::endl;
+
+        std::cout << "quaternion:" << std::endl;
+        std::cout << odom_quat << std::endl;
+
+        xyz_p.x = T_C_W_opencv.at<float>(0,3);
+        xyz_p.y = T_C_W_opencv.at<float>(1,3);
+        xyz_p.z = T_C_W_opencv.at<float>(2,3);
+
+        std::cout << "xyz position: " << std::endl << xyz_p << std::endl;
+
         //todo: transform 4x4 transform matrix to rotation and transformation in odometry message
-        ROS_INFO_THROTTLE(1.0, "pub odom");
-        static double x = 0.0;
-        static double y = 0.0;
-        static double th = 0.0;
 
-        double vx = 0.1;
-        double vy = 0;
-        double vth = 0.0;
+        odom_quat = tf::createQuaternionMsgFromYaw(0);
+        xyz_p.x = counter*0.2;
+        publish_odom(xyz_p, xyz_v_l, xyz_v_a,odom_quat);
 
-        double dt = 0.1;
-        double delta_x = (vx * cos(th) - vy * sin(th)) * dt;
-        double delta_y = (vx * sin(th) + vy * cos(th)) * dt;
-        double delta_th = vth * dt;
-
-        x += delta_x;
-        y += delta_y;
-        th += delta_th;
-
-        geometry_msgs::Quaternion odom_quat = tf::createQuaternionMsgFromYaw(th);
-        geometry_msgs::TransformStamped odom_trans;
-        odom_trans.header.stamp = ros::Time::now();
-        odom_trans.header.frame_id = "odom";
-        odom_trans.child_frame_id = "base_link";
-
-        odom_trans.transform.translation.x = y;
-        odom_trans.transform.translation.y = x;
-        odom_trans.transform.translation.z = 0.0;
-        odom_trans.transform.rotation = odom_quat;
-        odom_broadcaster_ptr->sendTransform(odom_trans);
-
-        nav_msgs::Odometry odom;
-        odom.header.stamp = ros::Time::now();
-        odom.header.frame_id = "odom";
-
-        //set the position
-        odom.pose.pose.position.x = y;
-        odom.pose.pose.position.y = x;
-        odom.pose.pose.position.z = 0.0;
-        odom.pose.pose.orientation = odom_quat;
-
-        //set the velocity
-        odom.child_frame_id = "base_link";
-        odom.twist.twist.linear.x = vx;
-        odom.twist.twist.linear.y = vy;
-        odom.twist.twist.angular.z = vth;
-        odom_pub_ptr->publish(odom);
     }
-
 }
 
 
