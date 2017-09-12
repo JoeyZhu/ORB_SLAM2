@@ -40,6 +40,29 @@
 #include <tf/transform_broadcaster.h>
 #include <nav_msgs/Odometry.h>
 
+static const boost::array<double, 36> STANDARD_POSE_COVARIANCE =
+{ { 0.1, 0, 0, 0, 0, 0,
+    0, 0.1, 0, 0, 0, 0,
+    0, 0, 0.1, 0, 0, 0,
+    0, 0, 0, 0.17, 0, 0,
+    0, 0, 0, 0, 0.17, 0,
+    0, 0, 0, 0, 0, 0.17 } };
+static const boost::array<double, 36> STANDARD_TWIST_COVARIANCE =
+{ { 0.002, 0, 0, 0, 0, 0,
+    0, 0.002, 0, 0, 0, 0,
+    0, 0, 0.05, 0, 0, 0,
+    0, 0, 0, 0.09, 0, 0,
+    0, 0, 0, 0, 0.09, 0,
+    0, 0, 0, 0, 0, 0.09 } };
+static const boost::array<double, 36> BAD_COVARIANCE =
+{ { 9999, 0, 0, 0, 0, 0,
+    0, 9999, 0, 0, 0, 0,
+    0, 0, 9999, 0, 0, 0,
+    0, 0, 0, 9999, 0, 0,
+    0, 0, 0, 0, 9999, 0,
+    0, 0, 0, 0, 0, 9999 } };
+
+
 using namespace std;
 
 class ImageGrabber
@@ -179,6 +202,90 @@ void publish_odom(geometry_msgs::Vector3 xyz_p,
     odom_pub_ptr->publish(odom);
 }
 
+void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time& timestamp)
+{
+	//TODO: transform sensor_tf to base_link_tf
+/*
+  if (sensor_frame_id_.empty())
+  {
+    ROS_ERROR("[odometer] update called with unknown sensor frame id!");
+    return;
+  }
+  if (timestamp < last_update_time_)
+  {
+    ROS_WARN("[odometer] saw negative time change in incoming sensor data, resetting pose.");
+    integrated_pose_.setIdentity();
+    tf_listener_.clear();
+  }
+  integrated_pose_ *= delta_transform;
+
+  // transform integrated pose to base frame
+  tf::StampedTransform base_to_sensor;
+  std::string error_msg;
+  if (tf_listener_.canTransform(base_link_frame_id_, sensor_frame_id_, timestamp, &error_msg))
+  {
+    tf_listener_.lookupTransform(
+        base_link_frame_id_,
+        sensor_frame_id_,
+        timestamp, base_to_sensor);
+  }
+  else
+  {
+    ROS_WARN_THROTTLE(10.0, "The tf from '%s' to '%s' does not seem to be available, "
+                            "will assume it as identity!",
+                            base_link_frame_id_.c_str(),
+                            sensor_frame_id_.c_str());
+    ROS_DEBUG("Transform error: %s", error_msg.c_str());
+    base_to_sensor.setIdentity();
+  }
+
+  tf::Transform base_transform = base_to_sensor * integrated_pose_ * base_to_sensor.inverse();
+*/
+
+	static ros::Time last_update_time_;
+	static tf::Transform sensor_transform_pre;
+
+  nav_msgs::Odometry odometry_msg;
+  odometry_msg.header.stamp = timestamp;
+  odometry_msg.header.frame_id = "/odom";
+  odometry_msg.child_frame_id = "/base_link";
+  tf::poseTFToMsg(sensor_transform, odometry_msg.pose.pose);
+
+  // calculate twist (not possible for first run as no delta_t can be computed)
+  if (!last_update_time_.isZero())
+  {
+    double delta_t = (timestamp - last_update_time_).toSec();
+    if (delta_t)
+    {
+      odometry_msg.twist.twist.linear.x = (sensor_transform * sensor_transform_pre.inverse()).getOrigin().getX() / delta_t;
+      odometry_msg.twist.twist.linear.y = (sensor_transform * sensor_transform_pre.inverse()).getOrigin().getY() / delta_t;
+      odometry_msg.twist.twist.linear.z = (sensor_transform * sensor_transform_pre.inverse()).getOrigin().getZ()  / delta_t;
+      tf::Quaternion delta_rot = (sensor_transform * sensor_transform_pre.inverse()).getRotation();
+      tfScalar angle = delta_rot.getAngle();
+      tf::Vector3 axis = delta_rot.getAxis();
+      tf::Vector3 angular_twist = axis * angle / delta_t;
+      odometry_msg.twist.twist.angular.x = angular_twist.x();
+      odometry_msg.twist.twist.angular.y = angular_twist.y();
+      odometry_msg.twist.twist.angular.z = angular_twist.z();
+    }
+  }
+
+  odometry_msg.pose.covariance = STANDARD_POSE_COVARIANCE;
+  odometry_msg.twist.covariance = STANDARD_TWIST_COVARIANCE;
+  odom_pub_ptr->publish(odometry_msg);
+
+  geometry_msgs::PoseStamped pose_msg;
+  pose_msg.header.stamp = odometry_msg.header.stamp;
+  pose_msg.header.frame_id = odometry_msg.header.frame_id;
+  pose_msg.pose = odometry_msg.pose.pose;
+
+  odom_broadcaster_ptr->sendTransform(
+          tf::StampedTransform(sensor_transform, timestamp,
+          "/odom", "/base_link"));
+
+  last_update_time_ = timestamp;
+  sensor_transform_pre = sensor_transform;
+}
 
 void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
 {
@@ -225,9 +332,12 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         geometry_msgs::Vector3 xyz_p, xyz_v_l, xyz_v_a;
         geometry_msgs::Quaternion odom_quat;
 
-        tf::Matrix3x3 m;
+        tf::Matrix3x3 rot_mat(
+        		T_C_W_opencv.at<float>(0,0), T_C_W_opencv.at<float>(0,1), T_C_W_opencv.at<float>(0,2),
+				T_C_W_opencv.at<float>(1,0), T_C_W_opencv.at<float>(1,1), T_C_W_opencv.at<float>(1,2),
+				T_C_W_opencv.at<float>(2,0), T_C_W_opencv.at<float>(2,1), T_C_W_opencv.at<float>(2,2));
         tf::Quaternion q;
-        m.getRotation(q);
+        rot_mat.getRotation(q);
         odom_quat.x = q.getX();
         odom_quat.y = q.getY();
         odom_quat.z = q.getZ();
@@ -245,10 +355,10 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
 
         std::cout << "xyz position: " << std::endl << xyz_p << std::endl;
 
-        //todo: transform 4x4 transform matrix to rotation and transformation in odometry message
+        tf::Vector3 t(T_C_W_opencv.at<float>(0,3), T_C_W_opencv.at<float>(1,3), T_C_W_opencv.at<float>(2,3));
+        tf::Transform camera_transform(rot_mat, t);
 
-        odom_quat = tf::createQuaternionMsgFromYaw(0);
-        xyz_p.x = counter*0.2;
+        integrateAndPublish(camera_transform, msgLeft->header.stamp);
         publish_odom(xyz_p, xyz_v_l, xyz_v_a,odom_quat);
 
     }
