@@ -21,21 +21,28 @@
 //test with
 /*
  * rosbag play --pause V1_02_medium.bag /cam0/image_raw:=/camera/left/image_raw /cam1/image_raw:=/camera/right/image_raw
+ *
+ * pub base to camera with:
+ *
+ * static_transform_publisher x y z yaw pitch roll frame_id child_frame_id
+ * <launch>
+<node pkg="tf2_ros" type="static_transform_publisher" name="camera_base" args="0 0 0 -3.1415926/2 3.1415926/2 0 /base_link /camera_base" />
+</launch>
  */
-#include<iostream>
-#include<algorithm>
-#include<fstream>
-#include<chrono>
+#include <iostream>
+#include <algorithm>
+#include <fstream>
+#include <chrono>
 
-#include<ros/ros.h>
+#include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
 
-#include<opencv2/core/core.hpp>
+#include <opencv2/core/core.hpp>
 
-#include"../../../include/System.h"
+#include "../../../include/System.h"
 
 #include <tf/transform_broadcaster.h>
 #include <nav_msgs/Odometry.h>
@@ -145,7 +152,7 @@ int main(int argc, char **argv)
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
     message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
-    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "camera/right/image_raw", 1);
+    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/right/image_raw", 1);
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
     message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
     sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));
@@ -176,8 +183,8 @@ void publish_odom(geometry_msgs::Vector3 xyz_p,
 
     geometry_msgs::TransformStamped odom_trans;
     odom_trans.header.stamp = ros::Time::now();
-    odom_trans.header.frame_id = "odom";
-    odom_trans.child_frame_id = "base_link";
+    odom_trans.header.frame_id = "/odom";
+    odom_trans.child_frame_id = "/base_link";
 
     odom_trans.transform.translation.x = xyz_p.x;
     odom_trans.transform.translation.y = xyz_p.y;
@@ -196,7 +203,7 @@ void publish_odom(geometry_msgs::Vector3 xyz_p,
     odom.pose.pose.orientation = odom_quat;
 
     //set the velocity
-    odom.child_frame_id = "base_link";
+    odom.child_frame_id = "/base_link";
     odom.twist.twist.linear = xyz_v_l;
     odom.twist.twist.angular = xyz_v_a;
     odom_pub_ptr->publish(odom);
@@ -327,6 +334,7 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
     ROS_INFO("ORBSLAM");
     // If tracking successfull
     if (!T_C_W_opencv.empty()) {
+    	//T_C_W_opencv = T_C_W_opencv.inv();
         static int counter = 0;
         counter++;
         geometry_msgs::Vector3 xyz_p, xyz_v_l, xyz_v_a;
