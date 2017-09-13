@@ -25,6 +25,7 @@
  * pub base to camera with:
  *
  * static_transform_publisher x y z yaw pitch roll frame_id child_frame_id
+ * rosrun tf2_ros static_transform_publisher 0 0 0 -1.57 0 -1.57 /base_link /camera_base
  * <launch>
 <node pkg="tf2_ros" type="static_transform_publisher" name="camera_base" args="0 0 0 -3.1415926/2 3.1415926/2 0 /base_link /camera_base" />
 </launch>
@@ -46,6 +47,7 @@
 
 #include <tf/transform_broadcaster.h>
 #include <nav_msgs/Odometry.h>
+#include <tf/transform_listener.h>
 
 static const boost::array<double, 36> STANDARD_POSE_COVARIANCE =
 { { 0.1, 0, 0, 0, 0, 0,
@@ -86,6 +88,7 @@ public:
 
 ros::Publisher *odom_pub_ptr;
 tf::TransformBroadcaster *odom_broadcaster_ptr;
+tf::TransformListener *tf_listener_ptr;
 
 int main(int argc, char **argv)
 {
@@ -156,6 +159,8 @@ int main(int argc, char **argv)
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
     message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
     sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));
+    tf_listener_ptr = new tf::TransformListener;
+
 
     ROS_INFO("INIT SUCCESS");
 
@@ -249,14 +254,48 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   tf::Transform base_transform = base_to_sensor * integrated_pose_ * base_to_sensor.inverse();
 */
 
+
+    tf::StampedTransform base_to_sensor;
+    std::string error_msg;
+    std::string base_link_frame_id_ = "/base_link";
+    std::string sensor_frame_id_ = "/camera_base";
+    if (tf_listener_ptr->canTransform(base_link_frame_id_, sensor_frame_id_, timestamp, &error_msg))
+    {
+    	tf_listener_ptr->lookupTransform(
+          base_link_frame_id_,
+          sensor_frame_id_,
+		  timestamp, base_to_sensor);
+    }
+    else
+    {
+      ROS_WARN_THROTTLE(1.0, "The tf from '%s' to '%s' does not seem to be available, "
+                              "will assume it as identity!",
+                              base_link_frame_id_.c_str(),
+                              sensor_frame_id_.c_str());
+      ROS_DEBUG("Transform error: %s", error_msg.c_str());
+      base_to_sensor.setIdentity();
+    }
+
+    tf::Transform base_transform = base_to_sensor * sensor_transform * base_to_sensor.inverse();
+
+    double bs_yaw = 1.0, bs_pitch, bs_roll;
+    base_to_sensor.getBasis().getEulerYPR(bs_yaw, bs_pitch, bs_roll);
+    std::cout << "base_to_sensor" << bs_yaw << ", " << bs_pitch << ", " << bs_roll << std::endl;
+    std::cout << "sensor_transform: " << sensor_transform.getOrigin().getX()
+    		<<", " << sensor_transform.getOrigin().getY()
+			<<", " << sensor_transform.getOrigin().getZ() << std::endl;
+    std::cout << "sensor_transform: " << base_transform.getOrigin().getX()
+    		<<", " << base_transform.getOrigin().getY()
+			<<", " << base_transform.getOrigin().getZ() << std::endl;
+
 	static ros::Time last_update_time_;
-	static tf::Transform sensor_transform_pre;
+	static tf::Transform base_transform_pre;
 
   nav_msgs::Odometry odometry_msg;
   odometry_msg.header.stamp = timestamp;
   odometry_msg.header.frame_id = "/odom";
   odometry_msg.child_frame_id = "/base_link";
-  tf::poseTFToMsg(sensor_transform, odometry_msg.pose.pose);
+  tf::poseTFToMsg(base_transform, odometry_msg.pose.pose);
 
   // calculate twist (not possible for first run as no delta_t can be computed)
   if (!last_update_time_.isZero())
@@ -264,10 +303,10 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
     double delta_t = (timestamp - last_update_time_).toSec();
     if (delta_t)
     {
-      odometry_msg.twist.twist.linear.x = (sensor_transform * sensor_transform_pre.inverse()).getOrigin().getX() / delta_t;
-      odometry_msg.twist.twist.linear.y = (sensor_transform * sensor_transform_pre.inverse()).getOrigin().getY() / delta_t;
-      odometry_msg.twist.twist.linear.z = (sensor_transform * sensor_transform_pre.inverse()).getOrigin().getZ()  / delta_t;
-      tf::Quaternion delta_rot = (sensor_transform * sensor_transform_pre.inverse()).getRotation();
+      odometry_msg.twist.twist.linear.x = (base_transform * base_transform_pre.inverse()).getOrigin().getX() / delta_t;
+      odometry_msg.twist.twist.linear.y = (base_transform * base_transform_pre.inverse()).getOrigin().getY() / delta_t;
+      odometry_msg.twist.twist.linear.z = (base_transform * base_transform_pre.inverse()).getOrigin().getZ()  / delta_t;
+      tf::Quaternion delta_rot = (base_transform * base_transform_pre.inverse()).getRotation();
       tfScalar angle = delta_rot.getAngle();
       tf::Vector3 axis = delta_rot.getAxis();
       tf::Vector3 angular_twist = axis * angle / delta_t;
@@ -287,11 +326,11 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   pose_msg.pose = odometry_msg.pose.pose;
 
   odom_broadcaster_ptr->sendTransform(
-          tf::StampedTransform(sensor_transform, timestamp,
+          tf::StampedTransform(base_transform, timestamp,
           "/odom", "/base_link"));
 
   last_update_time_ = timestamp;
-  sensor_transform_pre = sensor_transform;
+  base_transform_pre = base_transform;
 }
 
 void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
@@ -319,31 +358,31 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         return;
     }
 
-    cv::Mat T_C_W_opencv;
+    cv::Mat T_C_C0_opencv, T_C0_C_opencv;
     if(do_rectify)
     {
         cv::Mat imLeft, imRight;
         cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
         cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
-        T_C_W_opencv = mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
+        T_C0_C_opencv = mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
     }
     else
     {
-        T_C_W_opencv = mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
+    	T_C0_C_opencv = mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
     }
     ROS_INFO("ORBSLAM");
     // If tracking successfull
-    if (!T_C_W_opencv.empty()) {
-    	//T_C_W_opencv = T_C_W_opencv.inv();
+    if (!T_C0_C_opencv.empty()) {
+    	T_C_C0_opencv = T_C0_C_opencv.inv();
         static int counter = 0;
         counter++;
         geometry_msgs::Vector3 xyz_p, xyz_v_l, xyz_v_a;
         geometry_msgs::Quaternion odom_quat;
 
         tf::Matrix3x3 rot_mat(
-        		T_C_W_opencv.at<float>(0,0), T_C_W_opencv.at<float>(0,1), T_C_W_opencv.at<float>(0,2),
-				T_C_W_opencv.at<float>(1,0), T_C_W_opencv.at<float>(1,1), T_C_W_opencv.at<float>(1,2),
-				T_C_W_opencv.at<float>(2,0), T_C_W_opencv.at<float>(2,1), T_C_W_opencv.at<float>(2,2));
+        		T_C_C0_opencv.at<float>(0,0), T_C_C0_opencv.at<float>(0,1), T_C_C0_opencv.at<float>(0,2),
+				T_C_C0_opencv.at<float>(1,0), T_C_C0_opencv.at<float>(1,1), T_C_C0_opencv.at<float>(1,2),
+				T_C_C0_opencv.at<float>(2,0), T_C_C0_opencv.at<float>(2,1), T_C_C0_opencv.at<float>(2,2));
         tf::Quaternion q;
         rot_mat.getRotation(q);
         odom_quat.x = q.getX();
@@ -351,23 +390,24 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         odom_quat.z = q.getZ();
         odom_quat.w = q.getW();
 
+        xyz_p.x = T_C_C0_opencv.at<float>(0,3);
+        xyz_p.y = T_C_C0_opencv.at<float>(1,3);
+        xyz_p.z = T_C_C0_opencv.at<float>(2,3);
+
+#if 0
         std::cout << "T_C_W_opencv" << std::endl;
         std::cout << T_C_W_opencv << std::endl;
 
         std::cout << "quaternion:" << std::endl;
         std::cout << odom_quat << std::endl;
-
-        xyz_p.x = T_C_W_opencv.at<float>(0,3);
-        xyz_p.y = T_C_W_opencv.at<float>(1,3);
-        xyz_p.z = T_C_W_opencv.at<float>(2,3);
-
         std::cout << "xyz position: " << std::endl << xyz_p << std::endl;
+#endif
 
-        tf::Vector3 t(T_C_W_opencv.at<float>(0,3), T_C_W_opencv.at<float>(1,3), T_C_W_opencv.at<float>(2,3));
+        tf::Vector3 t(T_C_C0_opencv.at<float>(0,3), T_C_C0_opencv.at<float>(1,3), T_C_C0_opencv.at<float>(2,3));
         tf::Transform camera_transform(rot_mat, t);
 
         integrateAndPublish(camera_transform, msgLeft->header.stamp);
-        publish_odom(xyz_p, xyz_v_l, xyz_v_a,odom_quat);
+        //publish_odom(xyz_p, xyz_v_l, xyz_v_a,odom_quat);
 
     }
 }
