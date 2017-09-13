@@ -1,5 +1,7 @@
 # ORB-SLAM2
 **Authors:** [Raul Mur-Artal](http://webdiis.unizar.es/~raulmur/), [Juan D. Tardos](http://webdiis.unizar.es/~jdtardos/), [J. M. M. Montiel](http://webdiis.unizar.es/~josemari/) and [Dorian Galvez-Lopez](http://doriangalvez.com/) ([DBoW2](https://github.com/dorian3d/DBoW2))
+** also merged from https://github.com/Alkaid-Benetnash/ORB_SLAM2 
+**14 Jul 2017**: Binary format ORB vocabulary and Map save/load are now supported(See section 10 and 11).
 
 **13 Jan 2017**: OpenCV 3 and Eigen 3.3 are now supported.
 
@@ -71,6 +73,12 @@ We use modified versions of the [DBoW2](https://github.com/dorian3d/DBoW2) libra
 
 ## ROS (optional)
 We provide some examples to process the live input of a monocular, stereo or RGB-D camera using [ROS](ros.org). Building these examples is optional. In case you want to use ROS, a version Hydro or newer is needed.
+
+## Boost(optional)
+
+Map save/load feature needs boost library and more specifically the`libboost_serialization` library.
+
+See section 11
 
 # 3. Building ORB-SLAM2 library and examples
 
@@ -234,3 +242,36 @@ This is the default mode. The system runs in parallal three threads: Tracking, L
 ### Localization Mode
 This mode can be used when you have a good map of your working area. In this mode the Local Mapping and Loop Closing are deactivated. The system localizes the camera in the map (which is no longer updated), using relocalization if needed. 
 
+# 10. Binary Format ORB Vocabulary
+
+You can load ORB vocabulary in either text or binary format. The format is determined by suffix(.txt for text format and .bin for binary format).
+
+`build.sh` will generate a text-to-binary convertor `bin_vocabulary` in `Vocabulary/` . You can also find it as a target in `CMakeLists.txt`.
+
+`bin_vocabulary` will convert `./ORBvoc.txt` to `./ORBvoc.bin` and you can use the new `ORBvoc.bin` as  `PATH_TO_VOCABULARY`  wherever needed.
+
+PS: binary format is loaded faster and text format is more human-readable.
+
+# 11. Map Save/Load
+
+#### Enable:
+
+Considering this feature doesn't hurt performance, and it is annonying to deal with conditional compilation flags, so this feature will be enabled unconditionally.
+
+#### Usage:
+
+This feature is integrated with `class System`. The path of mapfile can be set by adding `Map.mapfile: map.bin` to ORB_SLAM2's settings file. See the last few line of `Example/Monocular/TUM1.xml`.
+
+To save a map, you need construct `ORB_SLAM2::System` with the last parameter be `true`. Then the `System` will save map to mapfile specified in setting file when `ShutDown`.
+
+With a readable mapfile, map will be loaded automatically and `System` will run in localization mode, but you can change it to SLAM mode later.
+
+If you set a mapfile but it doesn't exist, `System` will create new map.
+
+mono_tum has been updated as a simple example of this functionality. An extra command line parameter(0 or 1) should be given to indicate whether you want to save map or not.
+
+#### Implementation related:
+
+I use boost_serialization library to serialize `Map`, `MapPoint`, `KeyFrame`,`KeyFrameDatabase`, `cv::Mat`, `DBoW2::BowVector`, `DBoW2::FeatureVector`. In brief, only the `ORBVector` isn't serialized.
+
+This feature is tested with boost 1.64 and it works fine mostly. There is still some occasional segmentfault to dig in.
