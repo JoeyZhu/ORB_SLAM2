@@ -24,8 +24,10 @@
  *
  * pub base to camera with:
  *
- * static_transform_publisher x y z yaw pitch roll frame_id child_frame_id
- * rosrun tf2_ros static_transform_publisher 0 0 0 -1.57 0 -1.57 /base_link /camera_base
+ * static_transform_publisher x y z yaw pitch roll frame_id child_frame_id    -1.74 for install bias
+ * rosrun tf2_ros static_transform_publisher 0 0 0 -1.74 0 -1.57 /base_link /camera_base
+ * rosrun tf static_transform_publisher 0 0 0 -1.74 0 -1.57 /odom /odom_camera_base 10
+ * rosrun tf static_transform_publisher 0 0 0 -1.74 0 -1.57 /base_link /camera_base 10
  * <launch>
 <node pkg="tf2_ros" type="static_transform_publisher" name="camera_base" args="0 0 0 -3.1415926/2 3.1415926/2 0 /base_link /camera_base" />
 </launch>
@@ -178,7 +180,32 @@ int main(int argc, char **argv)
     //get path from tum trajectory.txt
     get_path_from_tum_trajectory("FrameTrajectory_TUM_Format.txt");
 
-    ros::spin();
+    //TODO: use coordinate transform by myself, not use tf transform, take too much system resources.
+    ros::Rate loop_rate(30);
+    while(ros::ok()){
+
+        // for vis
+        //create a message for the plan
+        nav_msgs::Path gui_path;
+        gui_path.poses.resize(plan_pose.size());
+
+        if(!plan_pose.empty())
+        {
+          gui_path.header.frame_id = plan_pose[0].header.frame_id;
+          gui_path.header.stamp = plan_pose[0].header.stamp;
+        }
+
+        // Extract the plan in world co-ordinates, we assume the path is all in the same frame
+        for(unsigned int i=0; i < plan_pose.size(); i++){
+          gui_path.poses[i] = plan_pose[i];
+        }
+
+        printf("path size: %ld\n", gui_path.poses.size());
+        plan_pub_ptr->publish(gui_path);
+
+    	ros::spinOnce();
+    	loop_rate.sleep();
+    }
 
     // Stop all threads
     SLAM.Shutdown();
@@ -215,7 +242,7 @@ int get_path_from_tum_trajectory(const string &filename){
         f >> q[i++];
         f >> q[i++];
         geometry_msgs::PoseStamped pose;
-        pose.header.frame_id = "odom";
+        pose.header.frame_id = "odom_camera_base";
         pose.header.stamp = ros::Time::now();
         pose.pose.position.x = t[0];
         pose.pose.position.y = t[1];
@@ -225,110 +252,32 @@ int get_path_from_tum_trajectory(const string &filename){
         pose.pose.orientation.z = q[2];
         pose.pose.orientation.w = q[3];
         plan_pose.push_back(pose);
-        printf("time: %f, %f,%f, %f,%f, %f,%f, %f\n", time, t[0], t[1], t[2], q[0], q[1], q[2], q[3]);
+        //printf("time: %f, %f,%f, %f,%f, %f,%f, %f\n", time, t[0], t[1], t[2], q[0], q[1], q[2], q[3]);
     }
 
-    // for vis
-    //create a message for the plan
-    nav_msgs::Path gui_path;
-    gui_path.poses.resize(plan_pose.size());
 
-    if(!plan_pose.empty())
-    {
-      gui_path.header.frame_id = plan_pose[0].header.frame_id;
-      gui_path.header.stamp = plan_pose[0].header.stamp;
-    }
-
-    // Extract the plan in world co-ordinates, we assume the path is all in the same frame
-    for(unsigned int i=0; i < plan_pose.size(); i++){
-      gui_path.poses[i] = plan_pose[i];
-    }
-
-    printf("size: %d\n", gui_path.poses.size());
-    plan_pub_ptr->publish(gui_path);
     return 0;
-}
-
-void publish_odom(geometry_msgs::Vector3 xyz_p,
-        geometry_msgs::Vector3 xyz_v_l,
-        geometry_msgs::Vector3 xyz_v_a,
-        geometry_msgs::Quaternion odom_quat){
-
-    ROS_INFO_THROTTLE(1.0, "pub odom");
-
-    geometry_msgs::TransformStamped odom_trans;
-    odom_trans.header.stamp = ros::Time::now();
-    odom_trans.header.frame_id = "/odom";
-    odom_trans.child_frame_id = "/base_link";
-
-    odom_trans.transform.translation.x = xyz_p.x;
-    odom_trans.transform.translation.y = xyz_p.y;
-    odom_trans.transform.translation.z = xyz_p.z;
-    odom_trans.transform.rotation = odom_quat;
-    odom_broadcaster_ptr->sendTransform(odom_trans);
-
-    nav_msgs::Odometry odom;
-    odom.header.stamp = ros::Time::now();
-    odom.header.frame_id = "odom";
-
-    //set the position
-    odom.pose.pose.position.x = xyz_p.x;
-    odom.pose.pose.position.y = xyz_p.y;
-    odom.pose.pose.position.z = xyz_p.z;
-    odom.pose.pose.orientation = odom_quat;
-
-    //set the velocity
-    odom.child_frame_id = "/base_link";
-    odom.twist.twist.linear = xyz_v_l;
-    odom.twist.twist.angular = xyz_v_a;
-    odom_pub_ptr->publish(odom);
 }
 
 void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time& timestamp)
 {
-	//TODO: transform sensor_tf to base_link_tf
-/*
-  if (sensor_frame_id_.empty())
-  {
-    ROS_ERROR("[odometer] update called with unknown sensor frame id!");
-    return;
-  }
-  if (timestamp < last_update_time_)
-  {
-    ROS_WARN("[odometer] saw negative time change in incoming sensor data, resetting pose.");
-    integrated_pose_.setIdentity();
-    tf_listener_.clear();
-  }
-  integrated_pose_ *= delta_transform;
+	static ros::Time last_update_time_;
+	static tf::Transform base_transform_pre;
+    std::string base_link_frame_id_ = "/base_link";
+    std::string sensor_frame_id_ = "/camera_base";
 
-  // transform integrated pose to base frame
-  tf::StampedTransform base_to_sensor;
-  std::string error_msg;
-  if (tf_listener_.canTransform(base_link_frame_id_, sensor_frame_id_, timestamp, &error_msg))
-  {
-    tf_listener_.lookupTransform(
-        base_link_frame_id_,
-        sensor_frame_id_,
-        timestamp, base_to_sensor);
-  }
-  else
-  {
-    ROS_WARN_THROTTLE(10.0, "The tf from '%s' to '%s' does not seem to be available, "
-                            "will assume it as identity!",
-                            base_link_frame_id_.c_str(),
-                            sensor_frame_id_.c_str());
-    ROS_DEBUG("Transform error: %s", error_msg.c_str());
-    base_to_sensor.setIdentity();
-  }
-
-  tf::Transform base_transform = base_to_sensor * integrated_pose_ * base_to_sensor.inverse();
-*/
-
+	if (sensor_frame_id_.empty()) {
+		ROS_ERROR("[odometer] update called with unknown sensor frame id!");
+		return;
+	}
+	if (timestamp < last_update_time_) {
+		ROS_WARN(
+				"[odometer] saw negative time change in incoming sensor data, resetting pose.");
+	}
 
     tf::StampedTransform base_to_sensor;
     std::string error_msg;
-    std::string base_link_frame_id_ = "/base_link";
-    std::string sensor_frame_id_ = "/camera_base";
+
     if (tf_listener_ptr->canTransform(base_link_frame_id_, sensor_frame_id_, timestamp, &error_msg))
     {
     	tf_listener_ptr->lookupTransform(
@@ -358,8 +307,7 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
     		<<", " << base_transform.getOrigin().getY()
 			<<", " << base_transform.getOrigin().getZ() << std::endl;
 
-	static ros::Time last_update_time_;
-	static tf::Transform base_transform_pre;
+
 
   nav_msgs::Odometry odometry_msg;
   odometry_msg.header.stamp = timestamp;
@@ -395,8 +343,9 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   pose_msg.header.frame_id = odometry_msg.header.frame_id;
   pose_msg.pose = odometry_msg.pose.pose;
 
+  //todo: use timestamp rather than ros::Time::now()
   odom_broadcaster_ptr->sendTransform(
-          tf::StampedTransform(base_transform, timestamp,
+          tf::StampedTransform(base_transform, ros::Time::now(),
           "/odom", "/base_link"));
 
   last_update_time_ = timestamp;
@@ -476,9 +425,8 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         tf::Vector3 t(T_C_C0_opencv.at<float>(0,3), T_C_C0_opencv.at<float>(1,3), T_C_C0_opencv.at<float>(2,3));
         tf::Transform camera_transform(rot_mat, t);
 
+        printf("time: %d, %d\n", msgLeft->header.stamp.sec, msgLeft->header.stamp.sec);
         integrateAndPublish(camera_transform, msgLeft->header.stamp);
-        //publish_odom(xyz_p, xyz_v_l, xyz_v_a,odom_quat);
-
     }
 }
 
