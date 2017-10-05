@@ -49,6 +49,12 @@
 #include <nav_msgs/Odometry.h>
 #include <tf/transform_listener.h>
 
+#include <nav_msgs/Path.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/Point.h>
+
+int get_path_from_tum_trajectory(const string &filename);
+
 static const boost::array<double, 36> STANDARD_POSE_COVARIANCE =
 { { 0.1, 0, 0, 0, 0, 0,
     0, 0.1, 0, 0, 0, 0,
@@ -89,6 +95,9 @@ public:
 ros::Publisher *odom_pub_ptr;
 tf::TransformBroadcaster *odom_broadcaster_ptr;
 tf::TransformListener *tf_listener_ptr;
+
+std::vector<geometry_msgs::PoseStamped> plan_pose;
+ros::Publisher *plan_pub_ptr;
 
 int main(int argc, char **argv)
 {
@@ -154,6 +163,8 @@ int main(int argc, char **argv)
     odom_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Odometry>("odom", 50));
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
+    plan_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Path>("plan", 1));
+
     message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
     message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/right/image_raw", 1);
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
@@ -164,6 +175,9 @@ int main(int argc, char **argv)
 
     ROS_INFO("INIT SUCCESS");
 
+    //get path from tum trajectory.txt
+    get_path_from_tum_trajectory("FrameTrajectory_TUM_Format.txt");
+
     ros::spin();
 
     // Stop all threads
@@ -171,11 +185,67 @@ int main(int argc, char **argv)
 
     // Save camera trajectory
     SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory_TUM_Format.txt");
-    SLAM.SaveTrajectoryTUM("FrameTrajectory_TUM_Format.txt");
+    //SLAM.SaveTrajectoryTUM("FrameTrajectory_TUM_Format.txt");
     SLAM.SaveTrajectoryKITTI("FrameTrajectory_KITTI_Format.txt");
 
     ros::shutdown();
 
+    return 0;
+}
+
+int get_path_from_tum_trajectory(const string &filename){
+    ifstream f;
+    f.open(filename.c_str());
+    if(!f){
+        printf("trajectory file name not correct!\n");
+        return -1;
+    }
+    double time, t[3], q[4];
+
+    plan_pose.clear();
+    while(f.good()){
+        int i = 0;
+        f >> time;
+        f >> t[i++];
+        f >> t[i++];
+        f >> t[i++];
+        i = 0;
+        f >> q[i++];
+        f >> q[i++];
+        f >> q[i++];
+        f >> q[i++];
+        geometry_msgs::PoseStamped pose;
+        pose.header.frame_id = "odom";
+        pose.header.stamp = ros::Time::now();
+        pose.pose.position.x = t[0];
+        pose.pose.position.y = t[1];
+        pose.pose.position.z = t[2];
+        pose.pose.orientation.x = q[0];
+        pose.pose.orientation.y = q[1];
+        pose.pose.orientation.z = q[2];
+        pose.pose.orientation.w = q[3];
+        plan_pose.push_back(pose);
+        printf("time: %f, %f,%f, %f,%f, %f,%f, %f\n", time, t[0], t[1], t[2], q[0], q[1], q[2], q[3]);
+    }
+
+    // for vis
+    //create a message for the plan
+    nav_msgs::Path gui_path;
+    gui_path.poses.resize(plan_pose.size());
+
+    if(!plan_pose.empty())
+    {
+      gui_path.header.frame_id = plan_pose[0].header.frame_id;
+      gui_path.header.stamp = plan_pose[0].header.stamp;
+    }
+
+    // Extract the plan in world co-ordinates, we assume the path is all in the same frame
+    for(unsigned int i=0; i < plan_pose.size(); i++){
+      gui_path.poses[i] = plan_pose[i];
+    }
+
+    printf("size: %d\n", gui_path.poses.size());
+    plan_pub_ptr->publish(gui_path);
     return 0;
 }
 
