@@ -54,8 +54,10 @@
 #include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Point.h>
+#include <visualization_msgs/Marker.h>
 
 int get_path_from_tum_trajectory(const string &filename);
+float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs::PoseStamped &pose2);
 
 static const boost::array<double, 36> STANDARD_POSE_COVARIANCE =
 { { 0.1, 0, 0, 0, 0, 0,
@@ -100,6 +102,8 @@ tf::TransformListener *tf_listener_ptr;
 
 std::vector<geometry_msgs::PoseStamped> plan_pose;
 ros::Publisher *plan_pub_ptr;
+ros::Publisher *current_pose_pub_ptr;
+ros::Publisher *local_target_pose_pub_ptr;
 
 int main(int argc, char **argv)
 {
@@ -166,6 +170,9 @@ int main(int argc, char **argv)
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
     plan_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Path>("plan", 1));
+
+    current_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("current_pose", 1));
+    local_target_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("local_target", 1));
 
     message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
     message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/right/image_raw", 1);
@@ -312,10 +319,10 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   odometry_msg.twist.covariance = STANDARD_TWIST_COVARIANCE;
   odom_pub_ptr->publish(odometry_msg);
 
-  geometry_msgs::PoseStamped pose_msg;
-  pose_msg.header.stamp = odometry_msg.header.stamp;
-  pose_msg.header.frame_id = odometry_msg.header.frame_id;
-  pose_msg.pose = odometry_msg.pose.pose;
+  geometry_msgs::PoseStamped odom_pose;
+  odom_pose.header.stamp = odometry_msg.header.stamp;
+  odom_pose.header.frame_id = odometry_msg.header.frame_id;
+  odom_pose.pose = odometry_msg.pose.pose;
 
   //todo: use timestamp rather than ros::Time::now()
   odom_broadcaster_ptr->sendTransform(
@@ -325,25 +332,72 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   last_update_time_ = timestamp;
   base_transform_pre = base_transform;
 
+  // convert plan pose in odom_camera_base to odom
   // get current and leading path points in base_link coordinate
-
-  // for visualization
-  nav_msgs::Path gui_path;
-  gui_path.poses.clear();
-
-  gui_path.header.frame_id = "odom";
-  gui_path.header.stamp = ros::Time::now();
-
+  std::vector<geometry_msgs::PoseStamped> poses_odom;
+  float min_dist = 9999;
+  int min_dist_idx = 0;
   for(int i = 0; i < plan_pose.size(); i++){
 	  geometry_msgs::PoseStamped pose_t;
 	  plan_pose[i].header.stamp = ros::Time::now();
 	  tf_listener_ptr->transformPose("odom", plan_pose[i], pose_t);		//TODO: use diy RT rather tf to get rid of time interpolation
-	  gui_path.poses.push_back(pose_t);
+	  poses_odom.push_back(pose_t);
+
+	  // get local point in poses_odom
+	  float dist = pose_distance(pose_t, odom_pose);
+	  if(dist < min_dist){
+		  min_dist = dist;
+		  min_dist_idx = i;
+	  }
   }
+
+  // publish local pose and local target for visuallization
+  visualization_msgs::Marker current_points;
+  current_points.header.frame_id = "odom";
+  current_points.header.stamp = ros::Time::now();
+  current_points.ns = "current_pose";
+  current_points.action = visualization_msgs::Marker::ADD;
+  current_points.id = 0;
+  current_points.type = visualization_msgs::Marker::POINTS;
+  current_points.scale.x = 0.1;
+  current_points.scale.y = 0.1;
+  current_points.color.r = 1.0f;
+  current_points.color.a = 0.8f;
+  geometry_msgs::Point p;
+  p.x = poses_odom[min_dist_idx].pose.position.x;
+  p.y = poses_odom[min_dist_idx].pose.position.y;
+  p.z = poses_odom[min_dist_idx].pose.position.z;
+  current_points.points.push_back(p);
+  //get 1 meters far away
+  float dist = 0;
+  while(dist < 1){
+	  dist = pose_distance(poses_odom[(min_dist_idx++)%poses_odom.size()], odom_pose);
+  }
+  p.x = poses_odom[min_dist_idx].pose.position.x;
+  p.y = poses_odom[min_dist_idx].pose.position.y;
+  p.z = poses_odom[min_dist_idx].pose.position.z;
+  current_points.points.push_back(p);
+  current_pose_pub_ptr->publish(current_points);
+
+  // for visualization
+  nav_msgs::Path gui_path;
+  gui_path.poses.resize(poses_odom.size());
+
+  gui_path.header.frame_id = "odom";
+  gui_path.header.stamp = ros::Time::now();
+  gui_path.poses = poses_odom;
 
   printf("path size: %ld\n", gui_path.poses.size());
   plan_pub_ptr->publish(gui_path);
   // get cmd_vel from base_link
+}
+
+float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs::PoseStamped &pose2){
+	float dx, dy, dz;
+	dx = pose1.pose.position.x - pose2.pose.position.x;
+	dy = pose1.pose.position.y - pose2.pose.position.y;
+	dz = pose1.pose.position.z - pose2.pose.position.z;
+	return hypot(hypot(dx, dy), dz);
 }
 
 void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
