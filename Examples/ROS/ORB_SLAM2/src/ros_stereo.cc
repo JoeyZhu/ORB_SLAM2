@@ -180,32 +180,7 @@ int main(int argc, char **argv)
     //get path from tum trajectory.txt
     get_path_from_tum_trajectory("FrameTrajectory_TUM_Format.txt");
 
-    //TODO: use coordinate transform by myself, not use tf transform, take too much system resources.
-    ros::Rate loop_rate(30);
-    while(ros::ok()){
-
-        // for vis
-        //create a message for the plan
-        nav_msgs::Path gui_path;
-        gui_path.poses.resize(plan_pose.size());
-
-        if(!plan_pose.empty())
-        {
-          gui_path.header.frame_id = plan_pose[0].header.frame_id;
-          gui_path.header.stamp = plan_pose[0].header.stamp;
-        }
-
-        // Extract the plan in world co-ordinates, we assume the path is all in the same frame
-        for(unsigned int i=0; i < plan_pose.size(); i++){
-          gui_path.poses[i] = plan_pose[i];
-        }
-
-        printf("path size: %ld\n", gui_path.poses.size());
-        plan_pub_ptr->publish(gui_path);
-
-    	ros::spinOnce();
-    	loop_rate.sleep();
-    }
+    ros::spin();
 
     // Stop all threads
     SLAM.Shutdown();
@@ -254,7 +229,6 @@ int get_path_from_tum_trajectory(const string &filename){
         plan_pose.push_back(pose);
         //printf("time: %f, %f,%f, %f,%f, %f,%f, %f\n", time, t[0], t[1], t[2], q[0], q[1], q[2], q[3]);
     }
-
 
     return 0;
 }
@@ -350,6 +324,26 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
 
   last_update_time_ = timestamp;
   base_transform_pre = base_transform;
+
+  // get current and leading path points in base_link coordinate
+
+  // for visualization
+  nav_msgs::Path gui_path;
+  gui_path.poses.clear();
+
+  gui_path.header.frame_id = "odom";
+  gui_path.header.stamp = ros::Time::now();
+
+  for(int i = 0; i < plan_pose.size(); i++){
+	  geometry_msgs::PoseStamped pose_t;
+	  plan_pose[i].header.stamp = ros::Time::now();
+	  tf_listener_ptr->transformPose("odom", plan_pose[i], pose_t);		//TODO: use diy RT rather tf to get rid of time interpolation
+	  gui_path.poses.push_back(pose_t);
+  }
+
+  printf("path size: %ld\n", gui_path.poses.size());
+  plan_pub_ptr->publish(gui_path);
+  // get cmd_vel from base_link
 }
 
 void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
