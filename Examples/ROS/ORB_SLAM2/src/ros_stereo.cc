@@ -20,7 +20,8 @@
 
 //test with
 /*
- * rosbag play --pause V1_02_medium.bag /cam0/image_raw:=/camera/left/image_raw /cam1/image_raw:=/camera/right/image_raw
+ * Note: copy FrameTrajectory_TUM_Format.txt to /home/joey/codes/ORB_SLAM2/Examples/ROS/ORB_SLAM2
+ * rosbag play --pause -l V1_02_medium.bag /cam0/image_raw:=/camera/left/image_raw /cam1/image_raw:=/camera/right/image_raw
  *
  * pub base to camera with:
  *
@@ -166,6 +167,9 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nh;
 
+    //get path from tum trajectory.txt
+    get_path_from_tum_trajectory("FrameTrajectory_TUM_Format.txt");
+
     odom_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Odometry>("odom", 50));
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
@@ -183,9 +187,6 @@ int main(int argc, char **argv)
 
 
     ROS_INFO("INIT SUCCESS");
-
-    //get path from tum trajectory.txt
-    get_path_from_tum_trajectory("FrameTrajectory_TUM_Format.txt");
 
     ros::spin();
 
@@ -205,7 +206,7 @@ int main(int argc, char **argv)
 int get_path_from_tum_trajectory(const string &filename){
     ifstream f;
     f.open(filename.c_str());
-    if(!f){
+    if(!f.good()){
         printf("trajectory file name not correct!\n");
         return -1;
     }
@@ -275,7 +276,6 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
       ROS_DEBUG("Transform error: %s", error_msg.c_str());
       base_to_sensor.setIdentity();
     }
-
     tf::Transform base_transform = base_to_sensor * sensor_transform * base_to_sensor.inverse();
 
     double bs_yaw = 1.0, bs_pitch, bs_roll;
@@ -287,7 +287,6 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
     std::cout << "sensor_transform: " << base_transform.getOrigin().getX()
     		<<", " << base_transform.getOrigin().getY()
 			<<", " << base_transform.getOrigin().getZ() << std::endl;
-
 
 
   nav_msgs::Odometry odometry_msg;
@@ -314,7 +313,6 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
       odometry_msg.twist.twist.angular.z = angular_twist.z();
     }
   }
-
   odometry_msg.pose.covariance = STANDARD_POSE_COVARIANCE;
   odometry_msg.twist.covariance = STANDARD_TWIST_COVARIANCE;
   odom_pub_ptr->publish(odometry_msg);
@@ -340,6 +338,7 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   for(int i = 0; i < plan_pose.size(); i++){
 	  geometry_msgs::PoseStamped pose_t;
 	  plan_pose[i].header.stamp = ros::Time::now();
+	  //printf("quer: %f, %f, %f, %f\n", plan_pose[i].pose.orientation.x, plan_pose[i].pose.orientation.y, plan_pose[i].pose.orientation.z, plan_pose[i].pose.orientation.w);
 	  tf_listener_ptr->transformPose("odom", plan_pose[i], pose_t);		//TODO: use diy RT rather tf to get rid of time interpolation
 	  poses_odom.push_back(pose_t);
 
