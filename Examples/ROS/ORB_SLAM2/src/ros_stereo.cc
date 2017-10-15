@@ -388,7 +388,20 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
 
   printf("path size: %ld\n", gui_path.poses.size());
   plan_pub_ptr->publish(gui_path);
+
   // get cmd_vel from base_link
+  geometry_msgs::PoseStamped leading_pose_in_base;
+  leading_pose_in_base.header.frame_id = "base_link";
+  leading_pose_in_base.header.stamp = poses_odom[min_dist_idx].header.stamp;
+  if(!tf_listener_ptr->waitForTransform("base_link",
+		  "odom",
+		  poses_odom[min_dist_idx].header.stamp,
+		  ros::Duration(0.1))){
+	  ROS_ERROR("odom to base_link timed out 0.5 seconds");
+  }else{
+	  tf_listener_ptr->transformPose("base_link", poses_odom[min_dist_idx], leading_pose_in_base);
+  }
+  ROS_INFO("leading_pose_in_base x, y: %f, %f\n", leading_pose_in_base.pose.position.x, leading_pose_in_base.pose.position.y);
 }
 
 float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs::PoseStamped &pose2){
