@@ -126,10 +126,11 @@ int main(int argc, char **argv)
     stringstream ss(argv[3]);
 	ss >> boolalpha >> igb.do_rectify;
 
+    // Load settings related to stereo calibration
+    cv::FileStorage fsSettings(argv[2], cv::FileStorage::READ);
+
     if(igb.do_rectify)
     {      
-        // Load settings related to stereo calibration
-        cv::FileStorage fsSettings(argv[2], cv::FileStorage::READ);
         if(!fsSettings.isOpened())
         {
             cerr << "ERROR: Wrong path to settings" << endl;
@@ -168,7 +169,18 @@ int main(int argc, char **argv)
     ros::NodeHandle nh;
 
     //get path from tum trajectory.txt
-    get_path_from_tum_trajectory("FrameTrajectory_TUM_Format.txt");
+    int follow_enable = 0;
+    fsSettings["Follow.enable"] >> follow_enable;
+    if(follow_enable){
+        string path_file;
+        path_file = (string)fsSettings["Follow.file"];
+        int i = get_path_from_tum_trajectory(path_file);
+        if(i < 0){
+            printf("please check FrameTrajectory_TUM_Format.txt\n");
+            exit(-1);
+        }
+    }
+
 
     odom_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Odometry>("odom", 50));
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
@@ -195,7 +207,9 @@ int main(int argc, char **argv)
 
     // Save camera trajectory
     SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory_TUM_Format.txt");
-    //SLAM.SaveTrajectoryTUM("FrameTrajectory_TUM_Format.txt");
+    if(!follow_enable){
+        SLAM.SaveTrajectoryTUM("FrameTrajectory_TUM_Format.txt");
+    }
     SLAM.SaveTrajectoryKITTI("FrameTrajectory_KITTI_Format.txt");
 
     ros::shutdown();
@@ -280,13 +294,13 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
 
     double bs_yaw = 1.0, bs_pitch, bs_roll;
     base_to_sensor.getBasis().getEulerYPR(bs_yaw, bs_pitch, bs_roll);
-    std::cout << "base_to_sensor" << bs_yaw << ", " << bs_pitch << ", " << bs_roll << std::endl;
-    std::cout << "sensor_transform: " << sensor_transform.getOrigin().getX()
-    		<<", " << sensor_transform.getOrigin().getY()
-			<<", " << sensor_transform.getOrigin().getZ() << std::endl;
-    std::cout << "sensor_transform: " << base_transform.getOrigin().getX()
-    		<<", " << base_transform.getOrigin().getY()
-			<<", " << base_transform.getOrigin().getZ() << std::endl;
+//    std::cout << "base_to_sensor" << bs_yaw << ", " << bs_pitch << ", " << bs_roll << std::endl;
+//    std::cout << "sensor_transform: " << sensor_transform.getOrigin().getX()
+//    		<<", " << sensor_transform.getOrigin().getY()
+//			<<", " << sensor_transform.getOrigin().getZ() << std::endl;
+//    std::cout << "sensor_transform: " << base_transform.getOrigin().getX()
+//    		<<", " << base_transform.getOrigin().getY()
+//			<<", " << base_transform.getOrigin().getZ() << std::endl;
 
 
   nav_msgs::Odometry odometry_msg;
@@ -349,7 +363,6 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
 		  min_dist_idx = i;
 	  }
   }
-
   // publish local pose and local target for visuallization
   visualization_msgs::Marker current_points;
   current_points.header.frame_id = "odom";
@@ -386,22 +399,22 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   gui_path.header.stamp = ros::Time::now();
   gui_path.poses = poses_odom;
 
-  printf("path size: %ld\n", gui_path.poses.size());
+  //printf("path size: %ld\n", gui_path.poses.size());
   plan_pub_ptr->publish(gui_path);
 
   // get cmd_vel from base_link
+  std::cout << "trjectory poses num: " << poses_odom.size() << std::endl;
+  std::cout << "target point in odom: " << p.x << " " << p.y << " " << p.z << std::endl;
   geometry_msgs::PoseStamped leading_pose_in_base;
+  tf::Pose target_pose_odom, target_pose_base;
+  tf::poseMsgToTF(poses_odom[min_dist_idx].pose, target_pose_odom);
+  target_pose_base = base_transform.inverse() * target_pose_odom;   // P_in_b = T_b_b0 * P_in_b0, I published T_b0_b
+  poseTFToMsg(target_pose_base,leading_pose_in_base.pose);
   leading_pose_in_base.header.frame_id = "base_link";
   leading_pose_in_base.header.stamp = poses_odom[min_dist_idx].header.stamp;
-  if(!tf_listener_ptr->waitForTransform("base_link",
-		  "odom",
-		  poses_odom[min_dist_idx].header.stamp,
-		  ros::Duration(0.1))){
-	  ROS_ERROR("odom to base_link timed out 0.5 seconds");
-  }else{
-	  tf_listener_ptr->transformPose("base_link", poses_odom[min_dist_idx], leading_pose_in_base);
-  }
+
   ROS_INFO("leading_pose_in_base x, y: %f, %f\n", leading_pose_in_base.pose.position.x, leading_pose_in_base.pose.position.y);
+
 }
 
 float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs::PoseStamped &pose2){
@@ -415,6 +428,7 @@ float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs
 void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
 {
     // Copy the ros image message to cv::Mat.
+    ros::Time now = ros::Time::now();
     cv_bridge::CvImageConstPtr cv_ptrLeft;
     try
     {
@@ -485,8 +499,8 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         tf::Vector3 t(T_C_C0_opencv.at<float>(0,3), T_C_C0_opencv.at<float>(1,3), T_C_C0_opencv.at<float>(2,3));
         tf::Transform camera_transform(rot_mat, t);
 
-        printf("time: %d, %d\n", msgLeft->header.stamp.sec, msgLeft->header.stamp.sec);
-        integrateAndPublish(camera_transform, msgLeft->header.stamp);
+        //printf("time: %d, %d\n", cv_ptrLeft->header.stamp.toSec(), msgLeft->header.stamp.sec);
+        integrateAndPublish(camera_transform, now);
     }
 }
 
