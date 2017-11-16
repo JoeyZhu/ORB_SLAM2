@@ -382,12 +382,14 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   current_points.points.push_back(p);
   //get 1 meters far away
   float dist = 0;
+  int target_idx = 0;
   while(dist < 1){
-	  dist = pose_distance(poses_odom[(min_dist_idx++)%poses_odom.size()], odom_pose);
+      target_idx = (min_dist_idx++)%poses_odom.size();
+	  dist = pose_distance(poses_odom[target_idx], odom_pose);
   }
-  p.x = poses_odom[min_dist_idx].pose.position.x;
-  p.y = poses_odom[min_dist_idx].pose.position.y;
-  p.z = poses_odom[min_dist_idx].pose.position.z;
+  p.x = poses_odom[target_idx].pose.position.x;
+  p.y = poses_odom[target_idx].pose.position.y;
+  p.z = poses_odom[target_idx].pose.position.z;
   current_points.points.push_back(p);
   current_pose_pub_ptr->publish(current_points);
 
@@ -403,15 +405,15 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   plan_pub_ptr->publish(gui_path);
 
   // get cmd_vel from base_link
-  std::cout << "trjectory poses num: " << poses_odom.size() << std::endl;
+  std::cout << "trjectory poses min_dist_idx: " << target_idx << std::endl;
   std::cout << "target point in odom: " << p.x << " " << p.y << " " << p.z << std::endl;
   geometry_msgs::PoseStamped leading_pose_in_base;
   tf::Pose target_pose_odom, target_pose_base;
-  tf::poseMsgToTF(poses_odom[min_dist_idx].pose, target_pose_odom);
+  tf::poseMsgToTF(poses_odom[target_idx].pose, target_pose_odom);
   target_pose_base = base_transform.inverse() * target_pose_odom;   // P_in_b = T_b_b0 * P_in_b0, I published T_b0_b
   poseTFToMsg(target_pose_base,leading_pose_in_base.pose);
   leading_pose_in_base.header.frame_id = "base_link";
-  leading_pose_in_base.header.stamp = poses_odom[min_dist_idx].header.stamp;
+  leading_pose_in_base.header.stamp = poses_odom[target_idx].header.stamp;
 
   ROS_INFO("leading_pose_in_base x, y: %f, %f\n", leading_pose_in_base.pose.position.x, leading_pose_in_base.pose.position.y);
 
