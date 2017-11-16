@@ -55,6 +55,7 @@
 #include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Point.h>
+#include <geometry_msgs/Twist.h>
 #include <visualization_msgs/Marker.h>
 
 int get_path_from_tum_trajectory(const string &filename);
@@ -105,6 +106,7 @@ std::vector<geometry_msgs::PoseStamped> plan_pose;
 ros::Publisher *plan_pub_ptr;
 ros::Publisher *current_pose_pub_ptr;
 ros::Publisher *local_target_pose_pub_ptr;
+ros::Publisher *cmd_vel_pub_ptr;
 
 int main(int argc, char **argv)
 {
@@ -186,7 +188,7 @@ int main(int argc, char **argv)
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
     plan_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Path>("plan", 1));
-
+    cmd_vel_pub_ptr = new ros::Publisher(nh.advertis<geometry_msgs::Twist>("/cmd_vel", 1));
     current_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("current_pose", 1));
     local_target_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("local_target", 1));
 
@@ -417,6 +419,12 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
 
   ROS_INFO("leading_pose_in_base x, y: %f, %f\n", leading_pose_in_base.pose.position.x, leading_pose_in_base.pose.position.y);
 
+  //publish cmd_vel with position.y
+  geometry_msgs::Twist msg;
+  msg.linear.x = 1.0;
+  msg.angular.z = 0.0;
+  //todo: add stategy
+  cmd_vel_pub_ptr->publish(msg);
 }
 
 float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs::PoseStamped &pose2){
