@@ -57,6 +57,7 @@
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/Twist.h>
 #include <visualization_msgs/Marker.h>
+#include <math.h>
 
 int get_path_from_tum_trajectory(const string &filename);
 float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs::PoseStamped &pose2);
@@ -297,9 +298,9 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
     double bs_yaw = 1.0, bs_pitch, bs_roll;
     base_to_sensor.getBasis().getEulerYPR(bs_yaw, bs_pitch, bs_roll);
 //    std::cout << "base_to_sensor" << bs_yaw << ", " << bs_pitch << ", " << bs_roll << std::endl;
-//    std::cout << "sensor_transform: " << sensor_transform.getOrigin().getX()
-//    		<<", " << sensor_transform.getOrigin().getY()
-//			<<", " << sensor_transform.getOrigin().getZ() << std::endl;
+    std::cout << "sensor_transform: " << sensor_transform.getOrigin().getX()
+    		<<", " << sensor_transform.getOrigin().getY()
+			<<", " << sensor_transform.getOrigin().getZ() << std::endl;
 //    std::cout << "sensor_transform: " << base_transform.getOrigin().getX()
 //    		<<", " << base_transform.getOrigin().getY()
 //			<<", " << base_transform.getOrigin().getZ() << std::endl;
@@ -383,6 +384,8 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   p.y = poses_odom[min_dist_idx].pose.position.y;
   p.z = poses_odom[min_dist_idx].pose.position.z;
   current_points.points.push_back(p);
+  //test-debug
+  int base_idx = min_dist_idx;
   //get 1 meters far away
   float dist = 0;
   int target_idx = 0;
@@ -395,6 +398,11 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   p.z = poses_odom[target_idx].pose.position.z;
   current_points.points.push_back(p);
   current_pose_pub_ptr->publish(current_points);
+
+  //test-debug
+  printf("indexes: %d, %d; point1: %f, %f, point2: %f, %f\n", base_idx, target_idx,
+          current_points.points[0].x, current_points.points[0].y,
+          current_points.points[1].x, current_points.points[1].y);
 
   // for visualization
   nav_msgs::Path gui_path;
@@ -417,14 +425,36 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   poseTFToMsg(target_pose_base,leading_pose_in_base.pose);
   leading_pose_in_base.header.frame_id = "base_link";
   leading_pose_in_base.header.stamp = poses_odom[target_idx].header.stamp;
+  float yaw_base, heading_yaw, turn_yaw;
+  yaw_base = tf::getYaw(odometry_msg.pose.pose.orientation);
+  heading_yaw = atan2(current_points.points[1].y - current_points.points[0].y, current_points.points[1].x - current_points.points[0].x);
+  turn_yaw = (heading_yaw - yaw_base);
+  if(turn_yaw > M_PI){
+      turn_yaw -= 2 * M_PI;
+  }else if(turn_yaw < -M_PI){
+      turn_yaw += 2*M_PI;
+  }else{}
+  ROS_INFO("leading_pose_in_base x, y: %f, %f, %f, %f, %f\n", leading_pose_in_base.pose.position.x,
+          leading_pose_in_base.pose.position.y,
+          yaw_base,
+          heading_yaw,
+          turn_yaw);
 
-  ROS_INFO("leading_pose_in_base x, y: %f, %f\n", leading_pose_in_base.pose.position.x, leading_pose_in_base.pose.position.y);
+  //test-debug
+  static int test = 0;
+  if(turn_yaw > 1.0){
+      test++;
+      if(test > 6){
+          exit(-2);
+      }
 
+  }
   //publish cmd_vel with position.y
   geometry_msgs::Twist msg;
   msg.linear.x = 1.0;
   msg.angular.z = 0.0;
   //todo: add stategy
+
   cmd_vel_pub_ptr->publish(msg);
 }
 
