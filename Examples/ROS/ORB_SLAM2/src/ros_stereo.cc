@@ -188,7 +188,7 @@ int main(int argc, char **argv)
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
     plan_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Path>("plan", 1));
-    cmd_vel_pub_ptr = new ros::Publisher(nh.advertis<geometry_msgs::Twist>("/cmd_vel", 1));
+    cmd_vel_pub_ptr = new ros::Publisher(nh.advertise<geometry_msgs::Twist>("/cmd_vel", 1));
     current_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("current_pose", 1));
     local_target_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("local_target", 1));
 
@@ -352,14 +352,15 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   float min_dist = 9999;
   int min_dist_idx = 0;
   for(int i = 0; i < plan_pose.size(); i++){
-	  geometry_msgs::PoseStamped pose_t;
-	  plan_pose[i].header.stamp = ros::Time::now();
-	  //printf("quer: %f, %f, %f, %f\n", plan_pose[i].pose.orientation.x, plan_pose[i].pose.orientation.y, plan_pose[i].pose.orientation.z, plan_pose[i].pose.orientation.w);
-	  tf_listener_ptr->transformPose("odom", plan_pose[i], pose_t);		//TODO: use diy RT rather tf to get rid of time interpolation
-	  poses_odom.push_back(pose_t);
+      geometry_msgs::PoseStamped pose_odom;
+      tf::Pose pose_cam_tf, pose_odom_tf;
+      tf::poseMsgToTF(plan_pose[i].pose, pose_cam_tf);
+      pose_odom_tf = base_to_sensor * pose_cam_tf;   // pose in camera coordinate convert to pose in odom coordinate
+      poseTFToMsg(pose_odom_tf,pose_odom.pose);
+      poses_odom.push_back(pose_odom);
 
 	  // get local point in poses_odom
-	  float dist = pose_distance(pose_t, odom_pose);
+	  float dist = pose_distance(pose_odom, odom_pose);
 	  if(dist < min_dist){
 		  min_dist = dist;
 		  min_dist_idx = i;
