@@ -384,7 +384,7 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   p.z = poses_odom[min_dist_idx].pose.position.z;
   current_points.points.push_back(p);
   //test-debug
-  int base_idx = min_dist_idx;
+//  int base_idx = min_dist_idx;
   //get 1 meters far away
   float dist = 0, dist1;
   int target_idx = 0, target_idx1 = 0;
@@ -409,10 +409,10 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   current_pose_pub_ptr->publish(current_points);
 
   //test-debug
-  printf("indexes: %d, %d; point1: %f, %f, point2: %f, %f\n", base_idx, target_idx,
-          current_points.points[0].x, current_points.points[0].y,
-          current_points.points[1].x, current_points.points[1].y);
-  printf("dist, dist1: %f, %f\n", dist, dist1);
+//  printf("indexes: %d, %d; point1: %f, %f, point2: %f, %f\n", base_idx, target_idx,
+//          current_points.points[0].x, current_points.points[0].y,
+//          current_points.points[1].x, current_points.points[1].y);
+//  printf("dist, dist1: %f, %f\n", dist, dist1);
 
   // for visualization
   nav_msgs::Path gui_path;
@@ -451,14 +451,13 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
           turn_yaw);
 
   //test-debug
-  static int test = 0;
-  if(turn_yaw > 1.3){
-      test++;
-      if(test > 6){
-          exit(-2);
-      }
-
-  }
+//  static int test = 0;
+//  if(turn_yaw > 1.3){
+//      test++;
+//      if(test > 6){
+//          exit(-2);
+//      }
+//  }
   //publish cmd_vel with position.y
   geometry_msgs::Twist msg;
   msg.linear.x = 1.0;
