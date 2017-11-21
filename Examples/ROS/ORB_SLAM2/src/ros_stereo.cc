@@ -184,7 +184,6 @@ int main(int argc, char **argv)
         }
     }
 
-
     odom_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Odometry>("odom", 50));
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
@@ -387,10 +386,20 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   //test-debug
   int base_idx = min_dist_idx;
   //get 1 meters far away
-  float dist = 0;
-  int target_idx = 0;
+  float dist = 0, dist1;
+  int target_idx = 0, target_idx1 = 0;
   while(dist < 1){
       target_idx = (min_dist_idx++)%poses_odom.size();
+
+      //check pose is in front of the robot
+      tf::Pose target_pose_odom, target_pose_base;
+      tf::poseMsgToTF(poses_odom[target_idx].pose, target_pose_odom);
+      target_pose_base = base_transform.inverse() * target_pose_odom;   // P_in_b = T_b_b0 * P_in_b0, I published T_b0_b
+      tf::Vector3 pose = target_pose_base.getOrigin();
+      float heading_angle = atan2(pose.getY(), pose.getX());
+      if((heading_angle > 2.0)||(pose.getX() < -1.0)){
+          continue;
+      }
 	  dist = pose_distance(poses_odom[target_idx], odom_pose);
   }
   p.x = poses_odom[target_idx].pose.position.x;
@@ -403,6 +412,7 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   printf("indexes: %d, %d; point1: %f, %f, point2: %f, %f\n", base_idx, target_idx,
           current_points.points[0].x, current_points.points[0].y,
           current_points.points[1].x, current_points.points[1].y);
+  printf("dist, dist1: %f, %f\n", dist, dist1);
 
   // for visualization
   nav_msgs::Path gui_path;
@@ -416,8 +426,8 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   plan_pub_ptr->publish(gui_path);
 
   // get cmd_vel from base_link
-  std::cout << "trjectory poses min_dist_idx: " << target_idx << std::endl;
-  std::cout << "target point in odom: " << p.x << " " << p.y << " " << p.z << std::endl;
+  //std::cout << "trjectory poses min_dist_idx: " << target_idx << std::endl;
+  //std::cout << "target point in odom: " << p.x << " " << p.y << " " << p.z << std::endl;
   geometry_msgs::PoseStamped leading_pose_in_base;
   tf::Pose target_pose_odom, target_pose_base;
   tf::poseMsgToTF(poses_odom[target_idx].pose, target_pose_odom);
@@ -442,7 +452,7 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
 
   //test-debug
   static int test = 0;
-  if(turn_yaw > 1.0){
+  if(turn_yaw > 1.3){
       test++;
       if(test > 6){
           exit(-2);
