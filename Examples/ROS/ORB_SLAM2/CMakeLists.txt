@@ -40,6 +40,9 @@ endif()
 
 find_package(Eigen3 3.1.0 REQUIRED)
 find_package(Pangolin REQUIRED)
+find_package (Boost COMPONENTS date_time filesystem system REQUIRED)
+include_directories (${Boost_INCLUDE_DIRS})
+link_directories(${Boost_LIBRARY_DIR})
 
 include_directories(
 ${PROJECT_SOURCE_DIR}
@@ -84,6 +87,7 @@ src/ros_stereo.cc
 
 target_link_libraries(Stereo
 ${LIBS}
+${Boost_LIBRARIES}
 )
 
 # Node for RGB-D camera
@@ -93,5 +97,6 @@ src/ros_rgbd.cc
 
 target_link_libraries(RGBD
 ${LIBS}
+${Boost_LIBRARIES}
 )
 
