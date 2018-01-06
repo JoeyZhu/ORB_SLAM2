@@ -1,4 +1,6 @@
-<!--     args="/media/joey/data/dataset/1004/ORBvoc_out.bin /media/joey/data/dataset/1004/fov90_orb_param_half.yaml true"  -->
+<!--     args="/media/joey/data/dataset/1004/ORBvoc_out.bin /media/joey/data/dataset/1004/fov90_orb_param_half.yaml true" 
+    args="/media/joey/data/dataset/1004/ORBvoc_out.bin /media/joey/data/dataset/1004/fov90_orb_param_half.yaml true" 
+     -->
 <launch>
 
   <node pkg="tf2_ros" type="static_transform_publisher" name="camera_to_base"
@@ -7,7 +9,8 @@
     args="0 0 0 -1.74 0 -1.57 /odom /odom_camera_base" />
   <node pkg="ORB_SLAM2" type="Stereo" name="orbslam_node"
   
-    args="/media/joey/7462D3570BB7CDEE/1004/ORBvoc_out.bin /media/joey/7462D3570BB7CDEE/1004/fov90_orb_param_half.yaml true" 
+
+    args="/home/joey/dataset/out_test2/ORBvoc_out.bin /home/joey/dataset/out_test2/largebaseline_orb_param.yaml true" 
     cwd="node" 
     output="screen" />
 

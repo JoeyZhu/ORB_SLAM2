@@ -32,6 +32,11 @@
  * <launch>
 <node pkg="tf2_ros" type="static_transform_publisher" name="camera_base" args="0 0 0 -3.1415926/2 3.1415926/2 0 /base_link /camera_base" />
 </launch>
+
+in config.yaml file add:
+Follow.enable: 1
+Follow.file: /media/joey/data/dataset/1004/FrameTrajectory_TUM_Format.txt
+
  */
 #include <iostream>
 #include <algorithm>
@@ -109,6 +114,8 @@ ros::Publisher *current_pose_pub_ptr;
 ros::Publisher *local_target_pose_pub_ptr;
 ros::Publisher *cmd_vel_pub_ptr;
 
+int follow_enable = 0;
+
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "ORBSLAM_STEREO");
@@ -172,7 +179,6 @@ int main(int argc, char **argv)
     ros::NodeHandle nh;
 
     //get path from tum trajectory.txt
-    int follow_enable = 0;
     fsSettings["Follow.enable"] >> follow_enable;
     if(follow_enable){
         string path_file;
@@ -264,6 +270,7 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
     std::string base_link_frame_id_ = "/base_link";
     std::string sensor_frame_id_ = "/camera_base";
 
+    ROS_INFO("integrate and publish");
 	if (sensor_frame_id_.empty()) {
 		ROS_ERROR("[odometer] update called with unknown sensor frame id!");
 		return;
@@ -351,7 +358,7 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   std::vector<geometry_msgs::PoseStamped> poses_odom;
   float min_dist = 9999;
   int min_dist_idx = 0;
-  for(int i = 0; i < plan_pose.size(); i++){
+  for(unsigned int i = 0; i < plan_pose.size(); i++){
       geometry_msgs::PoseStamped pose_odom;
       tf::Pose pose_cam_tf, pose_odom_tf;
       tf::poseMsgToTF(plan_pose[i].pose, pose_cam_tf);
@@ -388,8 +395,11 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   //get 1 meters far away
   float dist = 0, dist1;
   int target_idx = 0, target_idx1 = 0;
-  while(dist < 1){
-      target_idx = (min_dist_idx++)%poses_odom.size();
+  int found_count = 0;
+  while((dist < 1)&&(found_count < 10000)){
+      found_count++;
+      printf("found...\n");
+	  target_idx = (min_dist_idx++)%poses_odom.size();
 
       //check pose is in front of the robot
       tf::Pose target_pose_odom, target_pose_base;
@@ -449,6 +459,25 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
           yaw_base,
           heading_yaw,
           turn_yaw);
+  // alturnative2: use leading pose y to turn
+  if(leading_pose_in_base.pose.position.y > 0){
+	  turn_yaw = 1.0;
+  }else{
+	  turn_yaw = -1.0;
+  }
+  // alturnative: use current pose to turn . tested. not work both in theory and pratice
+/*  geometry_msgs::PoseStamped current_pose_in_base;
+  tf::Pose current_pose_odom, current_pose_base;
+  tf::poseMsgToTF(poses_odom[min_dist_idx].pose, current_pose_base);
+  current_pose_base = base_transform.inverse() * current_pose_odom;
+  poseTFToMsg(current_pose_base, current_pose_in_base.pose);
+  current_pose_in_base.header.frame_id = "base_link";
+  current_pose_in_base.header.stamp = poses_odom[min_dist_idx].header.stamp;
+  if(current_pose_in_base.pose.position.y > 0 ){
+	  turn_yaw = 1;
+  }else{
+	  turn_yaw = -1;
+  }*/
 
   //test-debug
 //  static int test = 0;
@@ -461,7 +490,8 @@ void integrateAndPublish(const tf::Transform& sensor_transform, const ros::Time&
   //publish cmd_vel with position.y
   geometry_msgs::Twist msg;
   msg.linear.x = 1.0;
-  msg.angular.z = 0.0;
+  msg.angular.z = turn_yaw;
+  ROS_INFO("OUTPUT CMD_VEL: %f, %f\n", msg.linear.x, msg.angular.z);
   //todo: add stategy
 
   cmd_vel_pub_ptr->publish(msg);
@@ -507,7 +537,9 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         cv::Mat imLeft, imRight;
         cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
         cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
+        printf("before orbslam track\n");
         T_C0_C_opencv = mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
+        printf("after orbslam track\n");
     }
     else
     {
@@ -538,8 +570,8 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         xyz_p.z = T_C_C0_opencv.at<float>(2,3);
 
 #if 0
-        std::cout << "T_C_W_opencv" << std::endl;
-        std::cout << T_C_W_opencv << std::endl;
+        std::cout << "T_C_C0_opencv" << std::endl;
+        std::cout << T_C_C0_opencv << std::endl;
 
         std::cout << "quaternion:" << std::endl;
         std::cout << odom_quat << std::endl;
@@ -550,7 +582,9 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         tf::Transform camera_transform(rot_mat, t);
 
         //printf("time: %d, %d\n", cv_ptrLeft->header.stamp.toSec(), msgLeft->header.stamp.sec);
-        integrateAndPublish(camera_transform, now);
+        if(follow_enable){
+            integrateAndPublish(camera_transform, now);
+        }
     }
 }
 
