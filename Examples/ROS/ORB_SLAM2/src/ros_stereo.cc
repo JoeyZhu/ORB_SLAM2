@@ -228,7 +228,7 @@ int main(int argc, char **argv)
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
 
     plan_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Path>("plan", 1));
-    cmd_vel_pub_ptr = new ros::Publisher(nh.advertise<geometry_msgs::Twist>("/cmd_vel", 1));
+    cmd_vel_pub_ptr = new ros::Publisher(nh.advertise<geometry_msgs::Twist>("/mobile_base/commands/velocity", 1));
     current_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("current_pose", 1));
     local_target_pose_pub_ptr = new ros::Publisher(nh.advertise<visualization_msgs::Marker>("local_target", 1));
 
@@ -556,7 +556,7 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
 //  }
   //publish cmd_vel with position.y
   geometry_msgs::Twist msg;
-  msg.linear.x = 0.1;
+  msg.linear.x = 0.8;
   msg.angular.z = turn_yaw;
   ROS_INFO("OUTPUT CMD_VEL: %f, %f\n", msg.linear.x, msg.angular.z);
   //todo: add stategy
