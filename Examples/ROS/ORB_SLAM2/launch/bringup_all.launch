@@ -10,7 +10,7 @@
   <node pkg="ORB_SLAM2" type="Stereo" name="orbslam_node"
   
 
-    args="/home/joey/dataset/out_test2/ORBvoc_out.bin /home/joey/dataset/out_test2/largebaseline_orb_param.yaml true" 
+    args="/home/joey/sf_dataset/orb_test/ORBvoc.bin /home/joey/sf_dataset/orb_test/largebaseline480_orb_param.yaml true" 
     cwd="node" 
     output="screen" />
 

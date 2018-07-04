@@ -64,6 +64,8 @@ Follow.file: /media/joey/data/dataset/1004/FrameTrajectory_TUM_Format.txt
 #include <visualization_msgs/Marker.h>
 #include <math.h>
 
+#include <termios.h>
+
 int get_path_from_tum_trajectory(const string &filename);
 float pose_distance(const geometry_msgs::PoseStamped &pose1, const geometry_msgs::PoseStamped &pose2);
 
@@ -115,6 +117,46 @@ ros::Publisher *local_target_pose_pub_ptr;
 ros::Publisher *cmd_vel_pub_ptr;
 
 int follow_enable = 0;
+
+char getch()
+{
+    fd_set set;
+    struct timeval timeout;
+    int rv;
+    char buff = 0;
+    int len = 1;
+    int filedesc = 0;
+    FD_ZERO(&set);
+    FD_SET(filedesc, &set);
+
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 1000;
+
+    rv = select(filedesc + 1, &set, NULL, NULL, &timeout);
+
+    struct termios old;
+    if (tcgetattr(filedesc, &old) < 0)
+        ROS_ERROR("tcsetattr()");
+    old.c_lflag &= ~ICANON;
+    old.c_lflag &= ~ECHO;
+    old.c_cc[VMIN] = 1;
+    old.c_cc[VTIME] = 0;
+    if (tcsetattr(filedesc, TCSANOW, &old) < 0)
+        ROS_ERROR("tcsetattr ICANON");
+
+    if(rv == -1)
+        ROS_ERROR("select");
+    else if(rv == 0)
+        ROS_DEBUG("no_key_pressed");
+    else
+        read(filedesc, &buff, len );
+
+    old.c_lflag |= ICANON;
+    old.c_lflag |= ECHO;
+    if (tcsetattr(filedesc, TCSADRAIN, &old) < 0)
+        ROS_ERROR ("tcsetattr ~ICANON");
+    return (buff);
+}
 
 int main(int argc, char **argv)
 {
@@ -209,8 +251,16 @@ int main(int argc, char **argv)
     ROS_INFO("INIT SUCCESS");
 
     ros::spin();
+//    while(ros::ok()){
+//      ros::spinOnce();
+//      int c = getch();
+//      if(c == 'q'){
+//        break;
+//      }
+//    }
 
     // Stop all threads
+    ROS_INFO("shuting down orbslam");
     SLAM.Shutdown();
 
     // Save camera trajectory
@@ -537,15 +587,15 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         cv::Mat imLeft, imRight;
         cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
         cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
-        printf("before orbslam track\n");
+//        printf("before orbslam track\n");
         T_C0_C_opencv = mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
-        printf("after orbslam track\n");
+//        printf("after orbslam track\n");
     }
     else
     {
     	T_C0_C_opencv = mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
     }
-    ROS_INFO("ORBSLAM");
+//    ROS_INFO("ORBSLAM");
     // If tracking successfull
     if (!T_C0_C_opencv.empty()) {
     	T_C_C0_opencv = T_C0_C_opencv.inv();
