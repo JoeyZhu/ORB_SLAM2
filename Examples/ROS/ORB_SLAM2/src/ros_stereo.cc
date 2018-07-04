@@ -110,11 +110,13 @@ ros::Publisher *odom_pub_ptr;
 tf::TransformBroadcaster *odom_broadcaster_ptr;
 tf::TransformListener *tf_listener_ptr;
 
-std::vector<geometry_msgs::PoseStamped> plan_pose;
+std::vector<geometry_msgs::PoseStamped> navi_poses_odom;
 ros::Publisher *plan_pub_ptr;
 ros::Publisher *current_pose_pub_ptr;
 ros::Publisher *local_target_pose_pub_ptr;
 ros::Publisher *cmd_vel_pub_ptr;
+std::string base_link_frame_id_ = "/base_link";
+std::string sensor_frame_id_ = "/camera_base";
 
 int follow_enable = 0;
 
@@ -220,17 +222,7 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nh;
 
-    //get path from tum trajectory.txt
-    fsSettings["Follow.enable"] >> follow_enable;
-    if(follow_enable){
-        string path_file;
-        path_file = (string)fsSettings["Follow.file"];
-        int i = get_path_from_tum_trajectory(path_file);
-        if(i < 0){
-            printf("please check FrameTrajectory_TUM_Format.txt\n");
-            exit(-1);
-        }
-    }
+
 
     odom_pub_ptr = new ros::Publisher(nh.advertise<nav_msgs::Odometry>("odom", 50));
     odom_broadcaster_ptr = new tf::TransformBroadcaster;
@@ -248,6 +240,18 @@ int main(int argc, char **argv)
     tf_listener_ptr = new tf::TransformListener;
 
     ROS_INFO("INIT SUCCESS");
+
+    //get path from tum trajectory.txt
+    fsSettings["Follow.enable"] >> follow_enable;
+    if(follow_enable){
+        string path_file;
+        path_file = (string)fsSettings["Follow.file"];
+        int i = get_path_from_tum_trajectory(path_file);
+        if(i < 0){
+            printf("please check FrameTrajectory_TUM_Format.txt\n");
+            exit(-1);
+        }
+    }
 
     ros::spin();
 //    while(ros::ok()){
@@ -275,6 +279,27 @@ int main(int argc, char **argv)
 }
 
 int get_path_from_tum_trajectory(const string &filename){
+
+  tf::StampedTransform T_b_c;   // T base to camera
+  std::string error_msg;
+
+  tf_listener_ptr->waitForTransform(base_link_frame_id_, sensor_frame_id_, ros::Time::now(), ros::Duration(1));
+  if (tf_listener_ptr->canTransform(base_link_frame_id_, sensor_frame_id_, ros::Time::now(), &error_msg))
+  {
+    tf_listener_ptr->lookupTransform(
+        base_link_frame_id_,
+        sensor_frame_id_,
+        ros::Time::now(), T_b_c);
+  }else{
+    ROS_WARN_THROTTLE(1.0, "The tf from '%s' to '%s' does not seem to be available, "
+                            "will assume it as identity!",
+                            base_link_frame_id_.c_str(),
+                            sensor_frame_id_.c_str());
+    ROS_DEBUG("Transform error: %s", error_msg.c_str());
+    T_b_c.setIdentity();
+  }
+
+
     ifstream f;
     f.open(filename.c_str());
     if(!f.good()){
@@ -283,7 +308,7 @@ int get_path_from_tum_trajectory(const string &filename){
     }
     double time, t[3], q[4];
 
-    plan_pose.clear();
+    navi_poses_odom.clear();
     while(f.good()){
         int i = 0;
         f >> time;
@@ -296,7 +321,7 @@ int get_path_from_tum_trajectory(const string &filename){
         f >> q[i++];
         f >> q[i++];
         geometry_msgs::PoseStamped pose;
-        pose.header.frame_id = "odom_camera_base";
+        pose.header.frame_id = "camera_base";
         pose.header.stamp = ros::Time::now();
         pose.pose.position.x = t[0];
         pose.pose.position.y = t[1];
@@ -305,7 +330,14 @@ int get_path_from_tum_trajectory(const string &filename){
         pose.pose.orientation.y = q[1];
         pose.pose.orientation.z = q[2];
         pose.pose.orientation.w = q[3];
-        plan_pose.push_back(pose);
+
+        geometry_msgs::PoseStamped pose_odom;
+        pose_odom.header.frame_id = "odom";
+        tf::Pose pose_cam_tf, pose_odom_tf;
+        tf::poseMsgToTF(pose.pose, pose_cam_tf);
+        pose_odom_tf = T_b_c * pose_cam_tf;   // pose in camera coordinate convert to pose in odom coordinate
+        poseTFToMsg(pose_odom_tf,pose_odom.pose);
+        navi_poses_odom.push_back(pose_odom);
         //printf("time: %f, %f,%f, %f,%f, %f,%f, %f\n", time, t[0], t[1], t[2], q[0], q[1], q[2], q[3]);
     }
 
@@ -316,8 +348,6 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
 {
 	static ros::Time last_update_time_;
 	static tf::Transform base_transform_pre;
-    std::string base_link_frame_id_ = "/base_link";
-    std::string sensor_frame_id_ = "/camera_base";
 
     ROS_INFO("integrate and publish");
 	if (sensor_frame_id_.empty()) {
@@ -404,19 +434,12 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
 
   // convert plan pose in odom_camera_base to odom
   // get current and leading path points in base_link coordinate
-  std::vector<geometry_msgs::PoseStamped> poses_odom;
+
   float min_dist = 9999;
   int min_dist_idx = 0;
-  for(unsigned int i = 0; i < plan_pose.size(); i++){
-      geometry_msgs::PoseStamped pose_odom;
-      tf::Pose pose_cam_tf, pose_odom_tf;
-      tf::poseMsgToTF(plan_pose[i].pose, pose_cam_tf);
-      pose_odom_tf = T_b_c * pose_cam_tf;   // pose in camera coordinate convert to pose in odom coordinate
-      poseTFToMsg(pose_odom_tf,pose_odom.pose);
-      poses_odom.push_back(pose_odom);
-
+  for(unsigned int i = 0; i < navi_poses_odom.size(); i++){
 	  // get local point in poses_odom
-	  float dist = pose_distance(pose_odom, odom_pose);
+	  float dist = pose_distance(navi_poses_odom[i], odom_pose);
 	  if(dist < min_dist){
 		  min_dist = dist;
 		  min_dist_idx = i;
@@ -435,11 +458,11 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
   current_points.color.r = 1.0f;
   current_points.color.a = 0.8f;
   geometry_msgs::Point p;
-  p.x = poses_odom[min_dist_idx].pose.position.x;
-  p.y = poses_odom[min_dist_idx].pose.position.y;
-  p.z = poses_odom[min_dist_idx].pose.position.z;
+  p.x = navi_poses_odom[min_dist_idx].pose.position.x;
+  p.y = navi_poses_odom[min_dist_idx].pose.position.y;
+  p.z = navi_poses_odom[min_dist_idx].pose.position.z;
   current_points.points.push_back(p);
-  //test-debug
+
 //  int base_idx = min_dist_idx;
   //get 1 meters far away
   float dist = 0;
@@ -447,23 +470,22 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
   int found_count = 0;
   while((dist < 1)&&(found_count < 10000)){
       found_count++;
-      printf("found...\n");
-	  target_idx = (min_dist_idx++)%poses_odom.size();
+	  target_idx = (min_dist_idx++)%navi_poses_odom.size();
 
       //check pose is in front of the robot
       tf::Pose target_pose_odom, target_pose_base;
-      tf::poseMsgToTF(poses_odom[target_idx].pose, target_pose_odom);
+      tf::poseMsgToTF(navi_poses_odom[target_idx].pose, target_pose_odom);
       target_pose_base = T_b_b0.inverse() * target_pose_odom;   // P_in_b = T_b0_b * P_in_b0, I published T_b0_b
       tf::Vector3 pose = target_pose_base.getOrigin();
       float heading_angle = atan2(pose.getY(), pose.getX());
       if((heading_angle > 2.0)||(pose.getX() < -1.0)){
           continue;
       }
-	  dist = pose_distance(poses_odom[target_idx], odom_pose);
+	  dist = pose_distance(navi_poses_odom[target_idx], odom_pose);
   }
-  p.x = poses_odom[target_idx].pose.position.x;
-  p.y = poses_odom[target_idx].pose.position.y;
-  p.z = poses_odom[target_idx].pose.position.z;
+  p.x = navi_poses_odom[target_idx].pose.position.x;
+  p.y = navi_poses_odom[target_idx].pose.position.y;
+  p.z = navi_poses_odom[target_idx].pose.position.z;
   current_points.points.push_back(p);
   current_pose_pub_ptr->publish(current_points);
 
@@ -475,11 +497,11 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
 
   // for visualization
   nav_msgs::Path gui_path;
-  gui_path.poses.resize(poses_odom.size());
+  gui_path.poses.resize(navi_poses_odom.size());
 
   gui_path.header.frame_id = "odom";
   gui_path.header.stamp = ros::Time::now();
-  gui_path.poses = poses_odom;
+  gui_path.poses = navi_poses_odom;
 
   //printf("path size: %ld\n", gui_path.poses.size());
   plan_pub_ptr->publish(gui_path);
@@ -489,11 +511,11 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
   //std::cout << "target point in odom: " << p.x << " " << p.y << " " << p.z << std::endl;
   geometry_msgs::PoseStamped leading_pose_in_base;
   tf::Pose target_pose_odom, target_pose_base;
-  tf::poseMsgToTF(poses_odom[target_idx].pose, target_pose_odom);
+  tf::poseMsgToTF(navi_poses_odom[target_idx].pose, target_pose_odom);
   target_pose_base = T_b_b0.inverse() * target_pose_odom;   // P_in_b = T_b0_b * P_in_b0, I published T_b0_b
   poseTFToMsg(target_pose_base,leading_pose_in_base.pose);
   leading_pose_in_base.header.frame_id = "base_link";
-  leading_pose_in_base.header.stamp = poses_odom[target_idx].header.stamp;
+  leading_pose_in_base.header.stamp = navi_poses_odom[target_idx].header.stamp;
   float yaw_base, heading_yaw, turn_yaw;
   yaw_base = tf::getYaw(odometry_msg.pose.pose.orientation);
   heading_yaw = atan2(current_points.points[1].y - current_points.points[0].y, current_points.points[1].x - current_points.points[0].x);
@@ -509,7 +531,7 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
           heading_yaw,
           turn_yaw);
 
-  turn_yaw = leading_pose_in_base.pose.position.y * 10;
+  turn_yaw = leading_pose_in_base.pose.position.y * 1;
   // Alternative: use current pose to turn . tested. not work both in theory and pratice
 /*  geometry_msgs::PoseStamped current_pose_in_base;
   tf::Pose current_pose_odom, current_pose_base;
@@ -534,7 +556,7 @@ void integrateAndPublish(const tf::Transform& T_c_c0_ros, const ros::Time& times
 //  }
   //publish cmd_vel with position.y
   geometry_msgs::Twist msg;
-  msg.linear.x = 1.0;
+  msg.linear.x = 0.1;
   msg.angular.z = turn_yaw;
   ROS_INFO("OUTPUT CMD_VEL: %f, %f\n", msg.linear.x, msg.angular.z);
   //todo: add stategy
